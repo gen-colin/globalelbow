@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>QR Code Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Simple, client‑side QR Code generator (no external API). Enter a URL or any text, click Generate, and download the PNG." />
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px;
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    .wrap { max-width: 820px; margin: 0 auto; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p.helper { margin: 0 0 16px; color: color-mix(in oklab, CanvasText 70%, Canvas); }
+    form {
+      display: grid; gap: 10px;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 640px) {
+      form { grid-template-columns: 1fr; }
+    }
+    input[type="text"] {
+      width: 100%; padding: 12px 14px;
+      border: 1px solid #c7c7c7; border-radius: 8px;
+      background: Field; color: FieldText;
+    }
+    .row { display: flex; gap: 10px; align-items: center; }
+    label { font-size: 13px; white-space: nowrap; }
+    select, input[type="color"] {
+      padding: 8px; border-radius: 8px; border: 1px solid #c7c7c7;
+      background: Field; color: FieldText;
+    }
+    button {
+      padding: 10px 14px; border: 0; border-radius: 8px; cursor: pointer;
+      background: #0b5fff; color: #fff; font-weight: 600;
+    }
+    button.secondary { background: #e7e7e7; color: #222; }
+    button.ghost { background: transparent; color: #0b5fff; border: 1px solid #0b5fff; }
+    #qrcode {
+      display: grid; place-items: center;
+      min-height: 240px; margin-top: 16px; padding: 16px;
+      border: 1px dashed #d0d0d0; border-radius: 12px;
+      background: color-mix(in oklab, Canvas 96%, #0000);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .note { font-size: 12px; color: color-mix(in oklab, CanvasText 60%, Canvas); margin-top: 12px; }
+    .error { color: #b00020; font-size: 13px; margin: 4px 0 0; min-height: 18px; }
+    footer { margin-top: 20px; font-size: 12px; color: color-mix(in oklab, CanvasText 60%, Canvas); }
+    code { background: color-mix(in oklab, Canvas 92%, #0000); padding: 1px 5px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>QR Code Generator</h1>
+    <p class="helper">Enter a URL (or any text), choose options, then click <b>Generate QR</b>. Download PNG or copy it to your clipboard.</p>
+
+    <form id="qr-form" onsubmit="return false;">
+      <input id="text" type="text" placeholder="https://example.org or mailto:support@example.org or any text…" spellcheck="false" />
+      <div class="row">
+        <label>Size&nbsp;
+          <select id="size">
+            <option>150</option>
+            <option selected>200</option>
+            <option>256</option>
+            <option>300</option>
+            <option>512</option>
+          </select>
+        </label>
+        <label>Dark&nbsp;<input id="dark" type="color" value="#000000" /></label>
+        <label>Light&nbsp;<input id="light" type="color" value="#ffffff" /></label>
+      </div>
+      <button id="make">Generate QR</button>
+      <div class="error" id="error"></div>
+    </form>
+
+    <div id="qrcode" aria-live="polite"></div>
+
+    <div class="actions">
+      <button id="download" class="secondary" type="button">Download PNG</button>
+      <button id="copy" class="ghost" type="button">Copy PNG to Clipboard</button>
+      <button id="clear" class="ghost" type="button">Clear</button>
+    </div>
+
+    <p class="note">
+      Tip: You can enter <code>mailto:someone@org.org</code>, tel:+15551234567, Wi‑Fi strings like
+      WIFI:T:WPA;S:MySSID;P:Secret123; or any text. The code is generated locally in your browser.
+    </p>
+  </div>
+
+  <!-- QRCode.js (client-side QR generation) -->
+  <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
+  <script>
+    const elText  = document.getElementById('text');
+    const elSize  = document.getElementById('size');
+    const elDark  = document.getElementById('dark');
+    const elLight = document.getElementById('light');
+    const elQR    = document.getElementById('qrcode');
+    const elError = document.getElementById('error');
+    const btnMake = document.getElementById('make');
+    const btnDl   = document.getElementById('download');
+    const btnCopy = document.getElementById('copy');
+    const btnClr  = document.getElementById('clear');
+
+    let qrInstance;
+
+    function validInput(str) {
+      // Accept any non-empty string; optionally nudge if it looks like a URL without scheme.
+      if (!str || !str.trim()) return { ok: false, message: "Please enter some text or a URL." };
+      if (/^[\w.-]+\.[a-z]{2,}/i.test(str) && !/^[a-z]+:\/\//i.test(str)) {
+        return { ok: true, hint: "Tip: For links, include https:// for best results." };
+      }
+      return { ok: true };
+    }
+
+    function render() {
+      elError.textContent = "";
+      const input = elText.value.trim();
+      const check = validInput(input);
+      if (!check.ok) {
+        elError.textContent = check.message;
+        return;
+      }
+      if (check.hint) elError.textContent = check.hint;
+
+      // Clear prior code
+      elQR.innerHTML = "";
+
+      // Create new code
+      const size = parseInt(elSize.value, 10) || 200;
+      qrInstance = new QRCode(elQR, {
+        text: input,
+        width: size,
+        height: size,
+        colorDark: elDark.value || "#000000",
+        colorLight: elLight.value || "#ffffff",
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    }
+
+    function getImageDataURL() {
+      const img = elQR.querySelector('img');
+      if (img && img.src?.startsWith('data:image')) return img.src;
+      const canvas = elQR.querySelector('canvas');
+      if (canvas) return canvas.toDataURL('image/png');
+      return null;
+    }
+
+    btnMake.addEventListener('click', render);
+    elText.addEventListener('keydown', (e) => { if (e.key === 'Enter') render(); });
+
+    btnDl.addEventListener('click', () => {
+      const dataUrl = getImageDataURL();
+      if (!dataUrl) return alert('Generate a QR first.');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = 'qr.png';
+      a.click();
+    });
+
+    btnCopy.addEventListener('click', async () => {
+      const dataUrl = getImageDataURL();
+      if (!dataUrl) return alert('Generate a QR first.');
+      try {
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        await navigator.clipboard.write([
+          new ClipboardItem({ [blob.type]: blob })
+        ]);
+        alert('QR PNG copied to clipboard.');
+      } catch (e) {
+        alert('Copy not supported in this browser. Use Download instead.');
+      }
+    });
+
+    btnClr.addEventListener('click', () => {
+      elText.value = "";
+      elQR.innerHTML = "";
+      elError.textContent = "";
+      elText.focus();
+    });
+
+    // Optional: prefill with example
+    elText.value = "mailto:shared-mailbox@yourorg.org";
+    render();
+  </script>
+</body>
+</html>
+``
